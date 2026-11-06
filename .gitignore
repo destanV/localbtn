@@ -1,0 +1,7 @@
+.env
+cookies.txt
+cookiefile
+cron.log
+urls.txt
+__pycache__/
+*.py[cod]
