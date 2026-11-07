@@ -12,7 +12,7 @@ cookies, and records the event to the ledger. Recommended use: a systemd .timer
 
 - Python 3.11 or newer (`tomllib`)
 - `ffmpeg` on `PATH` (yt-dlp uses it for merging, remuxing, and audio extraction)
-- `yt-dlp` (installed from `requirements.txt`)
+- `yt-dlp`
 
 ## Usage
 
