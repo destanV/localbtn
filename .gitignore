@@ -4,4 +4,4 @@ urls.txt
 __pycache__/
 *.py[cod]
 README-taslak.md
-
+.venv/

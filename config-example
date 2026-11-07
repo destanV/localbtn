@@ -13,10 +13,15 @@ delay = 180 # adds delay between subseq downloads to mitigate throttling
 
 [ytdlp]
 # passes args to yt-dlp. see yt-dlp documentation for info
+# don't put --simulate, -s, --skip-download, --no download as the script treats yt-dlp exit 0 as "downloaded" and will mess up the ledger
+# instead use --dry-run flag
+# or other no-file cases: --match-filter, --download-archive, --max-filesize, --print without --no-simulate can still mess up the ledger
+
 # Examples:
 #   audio-only:
 #     ["--cookies-from-browser", "firefox", "-x", "--audio-format", "mp3"]
 #   720p webm:
 #     ["--cookies-from-browser", "firefox", "-f", "bv*+ba/b",
 #      "-S", "res:720", "--merge-output-format", "webm"]
+
 args = []

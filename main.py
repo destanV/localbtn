@@ -15,7 +15,8 @@ from yt_dlp.version import __version__ as YTDLP_VERSION
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.toml"
 DOWNLOAD_TIMEOUT = 18000
-PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
+GITHUB_LATEST_URL = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
+NO_DOWNLOAD_FLAGS = {"-s", "--simulate", "--skip-download", "--no-download"}
 
 
 def load_config(path=CONFIG_PATH):
@@ -85,16 +86,29 @@ def get_settings(cfg):
     }
 
 
+def check_no_download_flags(ytdlp_args):
+    for arg in ytdlp_args:
+        if arg in NO_DOWNLOAD_FLAGS:
+            sys.exit(
+                f"config: {arg} is for a dry run, not [ytdlp].args\n"
+                "use `python main.py --dry-run` to preview without changing the ledger"
+            )
+
+
 def version_date(value):
     match = re.match(r"(\d{4})\.(\d{1,2})\.(\d{1,2})", str(value))
     return tuple(int(part) for part in match.groups()) if match else None
 
 
 def fetch_latest_ytdlp_version():
+    request = urllib.request.Request(
+        GITHUB_LATEST_URL,
+        headers={"User-Agent": "localbettin", "Accept": "application/vnd.github+json"},
+    )
     try:
-        with urllib.request.urlopen(PYPI_JSON_URL, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=10) as response:
             payload = json.load(response)
-        return str(payload["info"]["version"])
+        return str(payload["tag_name"])
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
@@ -112,7 +126,7 @@ def check_ytdlp_version():
     latest_date = version_date(latest)
     if installed_date and latest_date and installed_date < latest_date:
         sys.exit(
-            "yt-dlp version is old, update it to run this\n"
+            "yt-dlp version is old, update to run the script\n"
             f"installed: {YTDLP_VERSION}, latest: {latest}\n"
             f"update with: {sys.executable} -m pip install -U yt-dlp"
         )
@@ -127,7 +141,10 @@ def get_known_urls(urls_file):
 
 def append_url(url, urls_file):
     urls_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = urls_file.read_text(encoding="utf-8") if urls_file.exists() else ""
     with urls_file.open("a", encoding="utf-8") as file:
+        if existing and not existing.endswith("\n"):
+            file.write("\n")
         file.write(url.strip() + "\n")
 
 
@@ -199,20 +216,31 @@ def main():
             "in the [ytdlp] args array."
         )
     )
-    parser.parse_args()
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="list new videos without downloading or updating the ledger",
+    )
+    args = parser.parse_args()
 
     settings = get_settings(load_config())
+    check_no_download_flags(settings["ytdlp_args"])
     check_ytdlp_version()
-
-    downloads = settings["downloads"]
-    downloads.mkdir(parents=True, exist_ok=True)
 
     new_stuff = probe_channel(
         settings["channel_url"], settings["ledger"], settings["list_depth"]
     )
     if not new_stuff:
-        print("yeni video yok")
+        print("no new videos found")
         return 0
+
+    if args.dry_run:
+        for video in new_stuff:
+            print(f"video found: {video}")
+        print(f"Dry run: {len(new_stuff)} would be downloaded")
+        return 0
+
+    downloads = settings["downloads"]
+    downloads.mkdir(parents=True, exist_ok=True)
 
     failed = []
     for index, video in enumerate(new_stuff):
