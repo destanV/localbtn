@@ -10,8 +10,8 @@ cookies, and records the event to the ledger. Recommended use: a systemd .timer
 
 ## Requirements
 
-- Python 3.11 or newer (`tomllib`)
-- `ffmpeg` on `PATH` (yt-dlp uses it for merging, remuxing, and audio extraction)
+- Python 3.11 or newer
+- `ffmpeg` on `PATH`
 - `yt-dlp`
 
 ## Usage
@@ -41,7 +41,7 @@ $EDITOR config.toml
 ```
 
 `config-example` is a template: fill in every value, then run.
-## Example systemd timer
+## Example systemd automation
 
 `~/.config/systemd/user/localbtn.service`:
 
