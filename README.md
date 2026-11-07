@@ -1,6 +1,6 @@
 
 ## Purpose:
-Achive members-only videos, don'tlose access once your membership ends.
+Achive members-only videos, don't lose access once your membership ends.
 
 
 This script watches a channel's recent uploads, skips anything already recorded
