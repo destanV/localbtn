@@ -1,0 +1,3 @@
+# Unpinned on purpose: yt-dlp needs frequent updates for YouTube changes.
+# Update with: pip install -U yt-dlp
+yt-dlp

@@ -1,7 +1,7 @@
-.env
-cookies.txt
-cookiefile
-cron.log
+config.toml
+*.log
 urls.txt
 __pycache__/
 *.py[cod]
+README-taslak.md
+

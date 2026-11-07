@@ -1,30 +1,121 @@
 import argparse
-import os
+import json
 import re
 import subprocess
 import sys
 import time
+import tomllib
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-from dotenv import load_dotenv
 from yt_dlp import YoutubeDL
+from yt_dlp.version import __version__ as YTDLP_VERSION
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
-
-DEFAULT_CHANNEL_URL = "https://www.youtube.com/@FEYreal"
-CHANNEL_URL = (os.getenv("CHANNEL_URL") or DEFAULT_CHANNEL_URL).strip()
-AUDIO_EXTS = {"mp3", "opus", "m4a", "flac", "wav", "aac", "vorbis"}
-VIDEO_EXTS = {"webm", "mp4", "mkv"}
-DOWNLOAD_DELAY = 180
+CONFIG_PATH = BASE_DIR / "config.toml"
+DOWNLOAD_TIMEOUT = 18000
+PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 
 
-def env_path(name, default):
-    value = os.getenv(name)
-    if not value:
-        return default
+def load_config(path=CONFIG_PATH):
+    if not path.exists():
+        sys.exit(
+            f"config not found: {path}\n"
+
+        )
+    try:
+        with path.open("rb") as file:
+            return tomllib.load(file)
+    except tomllib.TOMLDecodeError as exc:
+        sys.exit(f"invalid {path.name}: {exc}")
+    except OSError as exc:
+        sys.exit(f"could not read {path}: {exc}")
+
+
+def section(cfg, name):
+    value = cfg.get(name, {})
+    if not isinstance(value, dict):
+        sys.exit(f"config: [{name}] must be a table")
+    return value
+
+
+def resolve_path(value):
     path = Path(value).expanduser()
     return path if path.is_absolute() else BASE_DIR / path
+
+
+def get_settings(cfg):
+    channel = section(cfg, "channel")
+    paths = section(cfg, "paths")
+    download = section(cfg, "download")
+    ytdlp = section(cfg, "ytdlp")
+
+    channel_url = str(channel.get("url") or "").strip()
+    if not channel_url:
+        sys.exit("config: [channel].url is required")
+
+    downloads = str(paths.get("downloads") or "").strip()
+    if not downloads:
+        sys.exit("config: [paths].downloads is required")
+
+    try:
+        list_depth = int(channel.get("list_depth", 4))
+        delay = int(download.get("delay", 180))
+    except (TypeError, ValueError):
+        sys.exit("config: list_depth and delay must be integers")
+    if list_depth < 1:
+        sys.exit("config: [channel].list_depth must be >= 1")
+    if delay < 0:
+        sys.exit("config: [download].delay must be >= 0")
+
+    ytdlp_args = ytdlp.get("args") or []
+    if not isinstance(ytdlp_args, list) or not all(
+        isinstance(arg, str) for arg in ytdlp_args
+    ):
+        sys.exit("config: [ytdlp].args must be an array of strings")
+
+    return {
+        "channel_url": channel_url,
+        "list_depth": list_depth,
+        "downloads": resolve_path(downloads),
+        "ledger": resolve_path(str(paths.get("ledger") or "urls.txt")),
+        "delay": delay,
+        "ytdlp_args": ytdlp_args,
+    }
+
+
+def version_date(value):
+    match = re.match(r"(\d{4})\.(\d{1,2})\.(\d{1,2})", str(value))
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def fetch_latest_ytdlp_version():
+    try:
+        with urllib.request.urlopen(PYPI_JSON_URL, timeout=10) as response:
+            payload = json.load(response)
+        return str(payload["info"]["version"])
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def check_ytdlp_version():
+    latest = fetch_latest_ytdlp_version()
+    if latest is None:
+        print(
+            f"warning: could not check for a newer yt-dlp (installed {YTDLP_VERSION})",
+            file=sys.stderr,
+        )
+        return
+
+    installed_date = version_date(YTDLP_VERSION)
+    latest_date = version_date(latest)
+    if installed_date and latest_date and installed_date < latest_date:
+        sys.exit(
+            "yt-dlp version is old, update it to run this\n"
+            f"installed: {YTDLP_VERSION}, latest: {latest}\n"
+            f"update with: {sys.executable} -m pip install -U yt-dlp"
+        )
 
 
 def get_known_urls(urls_file):
@@ -40,12 +131,12 @@ def append_url(url, urls_file):
         file.write(url.strip() + "\n")
 
 
-def get_vids(root_url):
+def get_vids(root_url, list_depth):
     # cookie olmadan flatlist, subscriber_only videolar görünür
     opts = {
         "extract_flat": True,
         "quiet": True,
-        "playlistend": int(os.getenv("LIST_DEPTH") or "4"),
+        "playlistend": list_depth,
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(root_url, download=False)
@@ -69,8 +160,8 @@ def get_vids(root_url):
     return videos
 
 
-def probe_channel(root_url, urls_file):
-    vids = get_vids(root_url)
+def probe_channel(root_url, urls_file, list_depth):
+    vids = get_vids(root_url, list_depth)
     known = get_known_urls(urls_file)
     new_stuff = []
     for url, meta in vids.items():
@@ -81,62 +172,17 @@ def probe_channel(root_url, urls_file):
     return new_stuff
 
 
-def parse_resolution(value):
-    text = value.strip().lower()
-    if text == "best":
-        return "best"
-    # 720, 1080p, 1080p60 -> 720, 1080, 1080
-    match = re.fullmatch(r"(\d{3,4})(?:p\d*)?", text)
-    if not match:
-        raise argparse.ArgumentTypeError(
-            f"invalid resolution {value!r}; use e.g. 720, 1080p, 1080p60 or best"
-        )
-    return match.group(1)
-
-
-def parse_ext(value):
-    ext = value.strip().lower().lstrip(".")
-    if ext == "ogg":
-        ext = "vorbis"
-    if ext not in VIDEO_EXTS | AUDIO_EXTS:
-        choices = ", ".join(sorted(VIDEO_EXTS | AUDIO_EXTS))
-        raise argparse.ArgumentTypeError(
-            f"unsupported extension {value!r}; choose one of: {choices}"
-        )
-    return ext
-
-
-def download_video(path, video, cookies_from_browser, resolution, ext):
+def download_video(path, video, ytdlp_args):
     output = str(path / "%(title)s [%(id)s].%(ext)s")
     cmd = [
         sys.executable, "-m", "yt_dlp",
-        "-q", "--no-warnings", "--no-progress",
-        "--no-playlist",
+        "-q", "--no-warnings", "--no-progress", "--no-playlist",
         "-o", output,
+        *ytdlp_args,
+        video,
     ]
-
-    if ext in AUDIO_EXTS:
-        cmd += ["-f", "bestaudio/b", "-x", "--audio-format", ext, "--audio-quality", "0"]
-    else:
-        sort = [] if resolution == "best" else [f"res:{resolution}"]
-        if ext == "webm":
-            sort += ["vcodec:av01", "acodec:opus"]
-        elif ext == "mp4":
-            sort += ["vcodec:h264", "acodec:aac"]
-        if sort:
-            cmd += ["-S", ",".join(sort)]
-        # bv*+ba/b forces a separate video+audio merge, so --merge-output-format
-        # always applies; --remux-video guarantees the container even when the
-        # `/b` fallback picks a single pre-muxed file.
-        cmd += [
-            "-f", "bv*+ba/b",
-            "--merge-output-format", ext,
-            "--remux-video", ext,
-        ]
-
-    cmd += ["--cookies-from-browser", cookies_from_browser, video]
     try:
-        return subprocess.run(cmd, timeout=18000).returncode == 0
+        return subprocess.run(cmd, timeout=DOWNLOAD_TIMEOUT).returncode == 0
     except subprocess.TimeoutExpired:
         print(f"error: download timed out: {video}", file=sys.stderr)
         return False
@@ -145,49 +191,35 @@ def download_video(path, video, cookies_from_browser, resolution, ext):
         return False
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(
-        description="Download new subscriber-only videos from a YouTube channel."
-    )
-    parser.add_argument("path", type=Path, help="directory to save downloads into")
-    parser.add_argument(
-        "-r", "--resolution", type=parse_resolution, default=None,
-        help="video height (default 720), e.g. 1080p, 1080p60 or best",
-    )
-    parser.add_argument(
-        "-e", "--ext", type=parse_ext, default="webm",
-        help="extension: webm (default), mp4, mkv, or audio: mp3, opus, ...",
-    )
-    args = parser.parse_args()
-
-    path = args.path.expanduser()
-    path.mkdir(parents=True, exist_ok=True)
-
-    cookies_from_browser = (os.getenv("COOKIES_FROM_BROWSER", "firefox:prf") or "").strip()
-    if not cookies_from_browser:
-        sys.exit("COOKIES_FROM_BROWSER bos; ornek: firefox:prf")
-
-    urls_file = env_path("URLS_FILE", BASE_DIR / "urls.txt")
-    resolution = args.resolution or "720"
-    ext = args.ext
-
-    if ext in AUDIO_EXTS and args.resolution is not None:
-        print(
-            f"warning: -e {ext} is audio-only; resolution {args.resolution} is ignored",
-            file=sys.stderr,
+        description=(
+            "Download new members-only videos from a YouTube channel. "
+            "Configuration is read from config.toml; download options belong "
+            "in the [ytdlp] args array."
         )
+    )
+    parser.parse_args()
 
-    new_stuff = probe_channel(CHANNEL_URL, urls_file)
+    settings = get_settings(load_config())
+    check_ytdlp_version()
+
+    downloads = settings["downloads"]
+    downloads.mkdir(parents=True, exist_ok=True)
+
+    new_stuff = probe_channel(
+        settings["channel_url"], settings["ledger"], settings["list_depth"]
+    )
     if not new_stuff:
         print("yeni video yok")
-        sys.exit(0)
+        return 0
 
     failed = []
     for index, video in enumerate(new_stuff):
         if index:
-            time.sleep(DOWNLOAD_DELAY)
-        if download_video(path, video, cookies_from_browser, resolution, ext):
-            append_url(video, urls_file)
+            time.sleep(settings["delay"])
+        if download_video(downloads, video, settings["ytdlp_args"]):
+            append_url(video, settings["ledger"])
             print(f"Downloaded: {video}")
         else:
             failed.append(video)
@@ -195,4 +227,9 @@ if __name__ == "__main__":
 
     if failed:
         print(f"{len(failed)}/{len(new_stuff)} download(s) failed", file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,22 @@
+# copy this file to config.toml then edit
+
+[channel]
+url = "" # which channel?
+list_depth = # how many recent entries to scan when looking for new videos? you may decrease it after first run.
+
+[paths]
+downloads = # path of videos 
+ledger = # path of ledger (tracks videos you already have or don't want for any reason)
+
+[download]
+delay = 180 # adds delay between subseq downloads to mitigate throttling
+
+[ytdlp]
+# passes args to yt-dlp. see yt-dlp documentation for info
+# Examples:
+#   audio-only:
+#     ["--cookies-from-browser", "firefox", "-x", "--audio-format", "mp3"]
+#   720p webm:
+#     ["--cookies-from-browser", "firefox", "-f", "bv*+ba/b",
+#      "-S", "res:720", "--merge-output-format", "webm"]
+args = []
